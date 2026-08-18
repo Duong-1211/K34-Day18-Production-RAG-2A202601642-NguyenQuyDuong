@@ -34,7 +34,36 @@ def summarize_chunk(text: str) -> str:
     Tạo summary ngắn cho chunk.
     Embed summary thay vì (hoặc cùng với) raw chunk → giảm noise.
     """
-    # TODO: Implement chunk summarization
+    if OPENAI_API_KEY:
+        try:
+            from openai import OpenAI
+
+            response = OpenAI().chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "Summarize the following text in 2-3 concise sentences.",
+                    },
+                    {"role": "user", "content": text},
+                ],
+                max_tokens=150,
+            )
+            return response.choices[0].message.content.strip()
+        except Exception as exc:
+            print(f"  OpenAI summarize failed: {exc}")
+
+    import re
+
+    sentences = [
+        sentence.strip()
+        for sentence in re.split(r"(?<=[.!?])\s+|\n+", text.strip())
+        if sentence.strip()
+    ]
+    if not sentences:
+        return text
+    summary = " ".join(sentences[:2])
+    return summary if summary.endswith((".", "!", "?")) else f"{summary}."
     # if OPENAI_API_KEY:
     #     try:
     #         from openai import OpenAI
@@ -65,7 +94,44 @@ def generate_hypothesis_questions(text: str, n_questions: int = 3) -> list[str]:
     Generate câu hỏi mà chunk có thể trả lời.
     Index cả questions lẫn chunk → query match tốt hơn (bridge vocabulary gap).
     """
-    # TODO: Implement HyQA generation
+    if n_questions <= 0 or not text.strip():
+        return []
+
+    if OPENAI_API_KEY:
+        try:
+            from openai import OpenAI
+
+            response = OpenAI().chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            f"Generate {n_questions} questions that the text can answer. "
+                            "Return one question per line."
+                        ),
+                    },
+                    {"role": "user", "content": text},
+                ],
+                max_tokens=200,
+            )
+            questions = response.choices[0].message.content.strip().splitlines()
+            return [
+                question.strip().lstrip("0123456789.-) ")
+                for question in questions
+                if question.strip()
+            ][:n_questions]
+        except Exception as exc:
+            print(f"  OpenAI HyQA failed: {exc}")
+
+    import re
+
+    sentences = [
+        sentence.strip()
+        for sentence in re.split(r"[.!?\n]", text)
+        if len(sentence.strip()) > 10
+    ]
+    return [f"{sentence.rstrip('.')}?" for sentence in sentences[:n_questions]]
     # if OPENAI_API_KEY:
     #     try:
     #         from openai import OpenAI
@@ -98,7 +164,34 @@ def contextual_prepend(text: str, document_title: str = "") -> str:
     Prepend context giải thích chunk nằm ở đâu trong document.
     Anthropic benchmark: giảm 49% retrieval failure (alone).
     """
-    # TODO: Implement contextual prepend
+    if OPENAI_API_KEY:
+        try:
+            from openai import OpenAI
+
+            response = OpenAI().chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "Write one concise sentence describing where this passage "
+                            "belongs in the document and what it is about."
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": f"Document: {document_title}\n\nPassage:\n{text}",
+                    },
+                ],
+                max_tokens=80,
+            )
+            context = response.choices[0].message.content.strip()
+            return f"{context}\n\n{text}"
+        except Exception as exc:
+            print(f"  OpenAI contextual failed: {exc}")
+
+    prefix = f"From {document_title}. " if document_title else ""
+    return f"{prefix}{text}"
     # if OPENAI_API_KEY:
     #     try:
     #         from openai import OpenAI
@@ -129,7 +222,37 @@ def extract_metadata(text: str) -> dict:
     """
     LLM extract metadata tự động: topic, entities, date_range, category.
     """
-    # TODO: Implement auto metadata extraction
+    fallback = {
+        "topic": "general",
+        "entities": [],
+        "category": "policy",
+        "language": "vi",
+    }
+    if OPENAI_API_KEY:
+        try:
+            import json as _json
+            from openai import OpenAI
+
+            response = OpenAI().chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            'Extract metadata and return JSON with keys '
+                            '"topic", "entities", "category", and "language".'
+                        ),
+                    },
+                    {"role": "user", "content": text},
+                ],
+                max_tokens=150,
+            )
+            metadata = _json.loads(response.choices[0].message.content)
+            return metadata if isinstance(metadata, dict) else fallback
+        except Exception as exc:
+            print(f"  OpenAI metadata failed: {exc}")
+
+    return fallback
     # if OPENAI_API_KEY:
     #     try:
     #         import json as _json
@@ -159,7 +282,44 @@ def _enrich_single_call(text: str, source: str) -> dict:
 
     ⚠️ Cost optimization: 1 API call thay vì 4 calls riêng lẻ.
     """
-    # TODO: Implement combined enrichment (1 call/chunk)
+    fallback = {
+        "summary": summarize_chunk(text) if not OPENAI_API_KEY else text,
+        "questions": generate_hypothesis_questions(text) if not OPENAI_API_KEY else [],
+        "context": f"From {source}." if source else "",
+        "metadata": {
+            "topic": "general",
+            "entities": [],
+            "category": "policy",
+            "language": "vi",
+        },
+    }
+    if OPENAI_API_KEY:
+        try:
+            import json as _json
+            from openai import OpenAI
+
+            response = OpenAI().chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "Analyze the passage and return JSON with summary, questions, "
+                            "context, and metadata fields."
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": f"Document: {source}\n\nPassage:\n{text}",
+                    },
+                ],
+                max_tokens=400,
+            )
+            result = _json.loads(response.choices[0].message.content)
+            return result if isinstance(result, dict) else fallback
+        except Exception as exc:
+            print(f"  OpenAI enrichment failed: {exc}")
+    return fallback
     # if OPENAI_API_KEY:
     #     try:
     #         import json as _json
@@ -182,7 +342,6 @@ def _enrich_single_call(text: str, source: str) -> dict:
     #         return _json.loads(resp.choices[0].message.content)
     #     except Exception as e:
     #         print(f"  ⚠️  Enrichment API failed: {e}")
-    return {}
 
 
 # ─── Full Enrichment Pipeline ────────────────────────────
