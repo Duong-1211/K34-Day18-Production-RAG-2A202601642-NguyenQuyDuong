@@ -37,3 +37,9 @@ def test_rrf_method():
     merged = reciprocal_rank_fusion([a, b], top_k=1)
     if merged:
         assert merged[0].method == "hybrid"
+
+
+def test_rrf_does_not_mutate_source_result():
+    result = SearchResult("d1", 0.9, {}, "bm25")
+    reciprocal_rank_fusion([[result]], top_k=1)
+    assert result.method == "bm25"
